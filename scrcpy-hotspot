@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Mirror the phone over its hotspot: the phone is the default gateway.
+# adb on port 5555 turns off when the phone reboots. If it is off, find the
+# Wireless debugging port, connect through it and turn port 5555 back on.
+
+hotspot='👾👾👾👾' # the phone's hotspot name (SSID)
+
+if ! nmcli -t -f NAME con show --active | grep -qxF "$hotspot"; then
+  echo "Connecting to the hotspot $hotspot..."
+  if ! nmcli con up "$hotspot" >/dev/null 2>&1; then
+    echo "Hotspot $hotspot not found. Turn on the hotspot on the phone and run this again." >&2
+    exit 1
+  fi
+fi
+
+phone=$(ip route show default | awk '{print $3; exit}')
+
+if adb connect "$phone:5555" | grep -q connected; then
+  exec scrcpy -s "$phone:5555" "$@"
+fi
+
+echo "Port 5555 is off (phone rebooted?). Looking for Wireless debugging on $phone..."
+port=$(nmap -Pn -p 30000-65535 --open -oG - "$phone" 2>/dev/null | grep -o '[0-9]*/open' | grep -v '^5555/' | head -1 | cut -d/ -f1)
+if [ -z "$port" ]; then
+  echo "Wireless debugging not found. On the phone: join any Wi-Fi, tap the Wireless debugging tile, then run this again." >&2
+  exit 1
+fi
+
+if ! adb connect "$phone:$port" | grep -q connected; then
+  echo "Could not connect to Wireless debugging at $phone:$port. Pair once with: adb pair $phone:<pairing-port> <code>" >&2
+  exit 1
+fi
+
+adb -s "$phone:$port" tcpip 5555
+adb disconnect "$phone:$port" >/dev/null
+sleep 2
+
+if ! adb connect "$phone:5555" | grep -q connected; then
+  echo "Turned on port 5555 but could not connect to it." >&2
+  exit 1
+fi
+
+echo "Port 5555 is on. You can turn Wireless debugging off again."
+exec scrcpy -s "$phone:5555" "$@"
